@@ -56,6 +56,7 @@ struct CompatFlags {
 	bool DrawSyncInstant;
 	bool FakeMipmapChange;
 	bool RequireBufferedRendering;
+	bool SkipBufferEffectsZeroUpload;
 	bool RequireBlockTransfer;
 	bool RequireDefaultCPUClock;
 	bool DisableAccurateDepth;

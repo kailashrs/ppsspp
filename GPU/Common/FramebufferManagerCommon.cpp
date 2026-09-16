@@ -2825,6 +2825,20 @@ void FramebufferManagerCommon::NotifyBlockTransferAfter(u32 dstBasePtr, int dstS
 			FlushBeforeCopy();
 			const u8 *srcBase = Memory::GetPointerUnchecked(srcBasePtr) + (srcX + srcY * srcStride) * bpp;
 
+			// Ultimate Ninja Impact uploads a zero-filled 64x64 tile to the display
+			// buffer before drawing its portraits. In non-buffered mode this visual
+			// upload produces a black rectangle. Keep the emulated memory transfer
+			// (already performed by the caller), but omit this display-only upload.
+			if (!useBufferedRendering_ && PSP_CoreParameter().compat.flags().SkipBufferEffectsZeroUpload &&
+				dstRect.vfb->fb_format == GE_FORMAT_5551 && dstStride == 512 &&
+				dstX == 0 && dstY == 0 && width == 64 && height == 64 &&
+				srcX == 0 && srcY == 0 && srcStride == 64 && bpp == 2 &&
+				Memory::IsValidRange(srcBasePtr, 64 * 64 * 2) &&
+				std::all_of(srcBase, srcBase + 64 * 64 * 2, [](u8 value) { return value == 0; })) {
+				WARN_LOG_ONCE(skipZeroUpload, Log::G3D, "Omitted non-buffered zero 64x64 display upload");
+				return;
+			}
+
 			int dstBpp = BufferFormatBytesPerPixel(dstRect.vfb->fb_format);
 			float dstXFactor = (float)bpp / dstBpp;
 			if (dstRect.w_bytes / bpp > dstRect.vfb->width || dstRect.h > dstRect.vfb->height) {

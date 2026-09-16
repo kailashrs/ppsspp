@@ -677,6 +677,53 @@ void DrawEngineCommon::SkipPrim(GEPrimitiveType prim, int vertexCount, const Ver
 	*bytesRead = vertexCount * dec->VertexSize();
 }
 
+// In skip-buffer mode, Ultimate Ninja Impact's small framebuffer-processing
+// pass otherwise draws into the visible upper-left corner. Match the captured
+// pass's geometry and state rather than dropping ordinary HUD rectangles.
+static bool IsSkippedNarutoScratchDraw(const void *verts, const void *inds,
+		GEPrimitiveType prim, int vertexCount, const VertexDecoder *dec, u32 vertTypeID) {
+	if (!g_Config.bSkipBufferEffects || GetGPUBackend() != GPUBackend::OPENGL ||
+		!PSP_CoreParameter().compat.flags().SkipBufferEffectsZeroUpload ||
+		prim != GE_PRIM_TRIANGLE_FAN || vertexCount != 4 || inds || !verts ||
+		gstate.isModeClear() || gstate.isDepthTestEnabled() || gstate.isAlphaTestEnabled() ||
+		!gstate.isAlphaBlendEnabled() || gstate.FrameBufFormat() != GE_FORMAT_5551 ||
+		gstate.FrameBufStride() != 512) {
+		return false;
+	}
+	const u32 target = gstate.getFrameBufAddress() & 0x3FFFFFFF;
+	if (target != 0x04000000 && target != 0x04044000)
+		return false;
+	const bool textured = gstate.isTextureMapEnabled();
+	const u32 expectedType = GE_VTYPE_THROUGH | GE_VTYPE_POS_FLOAT | (textured ? GE_VTYPE_TC_16BIT : 0);
+	const int stride = textured ? 16 : 12;
+	if ((vertTypeID & 0x00FFFFFF) != expectedType || dec->VertexSize() != stride)
+		return false;
+	if (textured) {
+		const u32 texture = gstate.getTextureAddress(0) & 0x3FFFFFFF;
+		if ((texture != 0x04000000 && texture != 0x04044000 && texture != 0x04088000) ||
+			(gstate.blend & 0x00FFFFFF) != 0x32 || gstate.getTextureFormat() != GE_TFMT_5551)
+			return false;
+	} else if ((gstate.blend & 0x00FFFFFF) != 0x2A2 || (gstate.blendfixb & 0x00FFFFFF) != 0xFFFFFF) {
+		return false;
+	}
+	static const float positions[4][3] = {{0, 0, 65535}, {0, 64, 65535}, {64, 64, 65535}, {64, 0, 65535}};
+	static const u16 texcoords[4][2] = {{0, 0}, {0, 272}, {480, 272}, {480, 0}};
+	for (int i = 0; i < 4; ++i) {
+		const u8 *vertex = static_cast<const u8 *>(verts) + i * stride;
+		float position[3];
+		memcpy(position, vertex + (textured ? 4 : 0), sizeof(position));
+		if (position[0] != positions[i][0] || position[1] != positions[i][1] || position[2] != positions[i][2])
+			return false;
+		if (textured) {
+			u16 uv[2];
+			memcpy(uv, vertex, sizeof(uv));
+			if (uv[0] != texcoords[i][0] || uv[1] != texcoords[i][1])
+				return false;
+		}
+	}
+	return true;
+}
+
 // vertTypeID is the vertex type but with the UVGen mode smashed into the top bits.
 bool DrawEngineCommon::SubmitPrim(const void *verts, const void *inds, GEPrimitiveType prim, int vertexCount, const VertexDecoder *dec, u32 vertTypeID, bool clockwise, int *bytesRead) {
 	if (!indexGen.PrimCompatible(prevPrim_, prim) || numDrawVerts_ >= MAX_DEFERRED_DRAW_VERTS || numDrawInds_ >= MAX_DEFERRED_DRAW_INDS || vertexCountInDrawCalls_ + vertexCount > VERTEX_BUFFER_MAX) {
@@ -706,6 +753,10 @@ bool DrawEngineCommon::SubmitPrim(const void *verts, const void *inds, GEPrimiti
 	}
 
 	*bytesRead = vertexCount * dec_->VertexSize();
+	if (IsSkippedNarutoScratchDraw(verts, inds, prim, vertexCount, dec_, vertTypeID)) {
+		WARN_LOG_ONCE(skipNarutoScratch, Log::G3D, "Omitted non-buffered Naruto 64x64 scratch draw");
+		return false;
+	}
 
 	// Check that we have enough vertices to form the requested primitive.
 	if (vertexCount < 3) {
