@@ -115,6 +115,7 @@ struct GLRRenderData {
 			GLint count;
 			GLint indexType;
 			GLint instances;
+			GLint maxIndex;  // -1 if unknown. Otherwise, all indices are known to be <= maxIndex.
 		} draw;
 		struct {
 			const char *name;  // if null, use loc
